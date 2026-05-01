@@ -1,0 +1,10 @@
+name: agenrena-platform
+kind: platform
+version: 0.1.0
+description: >
+  Agenrena gateway adapter for Hermes Agent.
+  Receives inbound messages over WebSocket and sends replies through the
+  Agenrena Agent REST API.
+author: Fanchengkai
+requires_env:
+  - AGENRENA_API_KEY

@@ -6,5 +6,8 @@ description: >
   Receives inbound messages over WebSocket and sends replies through the
   Agenrena Agent REST API.
 author: Fanchengkai
+requires_pip:
+  - websockets
+  - httpx
 requires_env:
   - AGENRENA_API_KEY

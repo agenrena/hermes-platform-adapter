@@ -255,6 +255,66 @@ class AgenrenaAdapter(BasePlatformAdapter):
                 )
                 await asyncio.sleep(RECONNECT_DELAY_SECONDS)
 
+    # -- Context item handlers keyed by metadata.message_type ---------------
+    # Each handler receives (item dict) and returns (text, media_urls, media_types).
+    # To support a new type, just add a ``_context_<type>`` method.
+
+    async def _context_text(
+        self, item: Dict[str, Any]
+    ) -> tuple[str, list[str], list[str]]:
+        label = item.get("label", "")
+        content = item.get("content", "")
+        text = f"{label}: {content}" if label and content else content
+        return text, [], []
+
+    async def _context_image(
+        self, item: Dict[str, Any], start_index: int = 0
+    ) -> tuple[str, list[str], list[str]]:
+        label = item.get("label", "")
+        urls: list[str] = []
+        types: list[str] = []
+        for media in item.get("media") or []:
+            if not isinstance(media, dict):
+                continue
+            media_url = media.get("url", "")
+            if not media_url:
+                continue
+            try:
+                cached = await cache_image_from_url(media_url, ext=".jpg")
+                urls.append(cached)
+                types.append("image/jpeg")
+                logger.info("[agenrena] Cached context image: %s", cached)
+            except Exception as e:
+                logger.warning("[agenrena] Failed to cache context image: %s", e)
+                urls.append(media_url)
+                types.append("image/jpeg")
+        if urls:
+            indices = ", ".join(
+                f"#{start_index + i + 1}" for i in range(len(urls))
+            )
+            text = f"{label}: [referenced image {indices}]" if label else f"[referenced image {indices}]"
+        else:
+            text = ""
+        return text, urls, types
+
+    async def _process_context_item(
+        self, item: Dict[str, Any], start_index: int = 0
+    ) -> tuple[str, list[str], list[str]]:
+        """Dispatch a single context item to its type-specific handler."""
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        msg_type = metadata.get("message_type", "")
+        handler = getattr(self, f"_context_{msg_type}", None)
+        if handler is not None:
+            if msg_type == "image":
+                return await handler(item, start_index=start_index)
+            return await handler(item)
+        # Fallback: dump as JSON so the agent still sees unknown types
+        label = item.get("label", "")
+        fallback = json.dumps(item, ensure_ascii=False)
+        text = f"{label}: {fallback}" if label else fallback
+        logger.debug("[agenrena] Unknown context type %r, using fallback", msg_type)
+        return text, [], []
+
     async def _handle_ws_message(self, raw: Any) -> None:
         try:
             if isinstance(raw, bytes):
@@ -305,6 +365,25 @@ class AgenrenaAdapter(BasePlatformAdapter):
                 media_urls.append(img_url)
                 media_types.append(mime_type)
 
+        # Parse context: referenced conversation items
+        reply_to_text: Optional[str] = None
+        context = payload.get("context")
+        if isinstance(context, dict):
+            items = context.get("items") if isinstance(context.get("items"), list) else []
+            context_parts: list[str] = []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                ctx_text, ctx_urls, ctx_types = await self._process_context_item(
+                    item, start_index=len(media_urls)
+                )
+                if ctx_text:
+                    context_parts.append(ctx_text)
+                media_urls.extend(ctx_urls)
+                media_types.extend(ctx_types)
+            if context_parts:
+                reply_to_text = "\n".join(context_parts)
+
         if not text.strip() and not media_urls:
             return
 
@@ -331,6 +410,7 @@ class AgenrenaAdapter(BasePlatformAdapter):
             media_urls=media_urls,
             media_types=media_types,
             reply_to_message_id=payload.get("reply_to_id"),
+            reply_to_text=reply_to_text,
             timestamp=_parse_timestamp(payload.get("created_at")),
         )
         await self.handle_message(event)

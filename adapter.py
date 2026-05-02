@@ -206,9 +206,13 @@ class AgenrenaAdapter(BasePlatformAdapter):
                 response.raise_for_status()
                 data = response.json()
         except httpx.HTTPStatusError as exc:
-            error = f"Agenrena send failed: {exc.response.status_code} {exc.response.text}"
+            error = (
+                f"Agenrena send failed: {exc.response.status_code} {exc.response.text}"
+            )
             logger.error("[agenrena] %s", error)
-            return SendResult(success=False, error=error, retryable=exc.response.status_code >= 500)
+            return SendResult(
+                success=False, error=error, retryable=exc.response.status_code >= 500
+            )
         except Exception as exc:
             logger.error("[agenrena] Send failed: %s", exc)
             return SendResult(success=False, error=str(exc), retryable=True)
@@ -229,7 +233,9 @@ class AgenrenaAdapter(BasePlatformAdapter):
     async def _receive_loop(self) -> None:
         while self._running:
             try:
-                async with websockets.connect(self._ws_url(), ping_interval=20, ping_timeout=20) as ws:
+                async with websockets.connect(
+                    self._ws_url(), ping_interval=20, ping_timeout=20
+                ) as ws:
                     self._ws = ws
                     self._connected_event.set()
                     async for raw in ws:
@@ -243,7 +249,9 @@ class AgenrenaAdapter(BasePlatformAdapter):
                 self._ws = None
 
             if self._running:
-                logger.info("[agenrena] Reconnecting WebSocket in %ss", RECONNECT_DELAY_SECONDS)
+                logger.info(
+                    "[agenrena] Reconnecting WebSocket in %ss", RECONNECT_DELAY_SECONDS
+                )
                 await asyncio.sleep(RECONNECT_DELAY_SECONDS)
 
     async def _handle_ws_message(self, raw: Any) -> None:
@@ -257,18 +265,26 @@ class AgenrenaAdapter(BasePlatformAdapter):
 
         message_id = str(payload.get("id") or "").strip()
         chat_id = str(payload.get("conversation_id") or "").strip()
-        sender = payload.get("sender") if isinstance(payload.get("sender"), dict) else {}
+        sender = (
+            payload.get("sender") if isinstance(payload.get("sender"), dict) else {}
+        )
         user_id = str(sender.get("id") or "").strip()
 
         if not message_id or not chat_id or not user_id:
-            logger.debug("[agenrena] Ignoring incomplete WebSocket payload: %s", payload)
+            logger.debug(
+                "[agenrena] Ignoring incomplete WebSocket payload: %s", payload
+            )
             return
 
         text = str(payload.get("text") or "")
-        images = payload.get("images") if isinstance(payload.get("images"), list) else []
+        images = (
+            payload.get("images") if isinstance(payload.get("images"), list) else []
+        )
         if not text.strip():
             if images:
-                logger.info("[agenrena] Skipping image-only inbound message %s", message_id)
+                logger.info(
+                    "[agenrena] Skipping image-only inbound message %s", message_id
+                )
             return
 
         sender_name = (
@@ -315,7 +331,11 @@ def interactive_setup() -> None:
     print_header("Agenrena")
     existing_key = get_env_value("AGENRENA_API_KEY")
     if existing_key:
-        masked = existing_key[:6] + "..." + existing_key[-4:] if len(existing_key) > 10 else "***"
+        masked = (
+            existing_key[:6] + "..." + existing_key[-4:]
+            if len(existing_key) > 10
+            else "***"
+        )
         print_info(f"Agenrena: already configured (key: {masked})")
         if not prompt_yes_no("Reconfigure Agenrena?", False):
             return
@@ -348,7 +368,9 @@ def interactive_setup() -> None:
             print_success("Allowlist configured")
         else:
             save_env_value("AGENRENA_ALLOWED_USERS", "")
-            print_info("No users allowed — the bot will ignore all messages until you add users.")
+            print_info(
+                "No users allowed — the bot will ignore all messages until you add users."
+            )
 
     print()
     print_success("Agenrena configuration saved to ~/.hermes/.env")

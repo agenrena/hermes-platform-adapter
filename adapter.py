@@ -41,6 +41,7 @@ from gateway.platforms.base import (
     MessageEvent,
     MessageType,
     SendResult,
+    cache_image_from_url,
 )
 
 logger = logging.getLogger(__name__)
@@ -280,12 +281,34 @@ class AgenrenaAdapter(BasePlatformAdapter):
         images = (
             payload.get("images") if isinstance(payload.get("images"), list) else []
         )
-        if not text.strip():
-            if images:
-                logger.info(
-                    "[agenrena] Skipping image-only inbound message %s", message_id
-                )
+
+        # Download images to local cache for vision tool access
+        media_urls: list[str] = []
+        media_types: list[str] = []
+        for img in images:
+            if not isinstance(img, dict):
+                continue
+            img_url = img.get("url", "")
+            if not img_url:
+                continue
+            mime_type = img.get("mime_type", "image/jpeg")
+            ext = "." + mime_type.split("/")[-1].split(";")[0]
+            if ext not in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
+                ext = ".jpg"
+            try:
+                cached_path = await cache_image_from_url(img_url, ext=ext)
+                media_urls.append(cached_path)
+                media_types.append(mime_type)
+                logger.info("[agenrena] Cached image: %s", cached_path)
+            except Exception as e:
+                logger.warning("[agenrena] Failed to cache image: %s", e)
+                media_urls.append(img_url)
+                media_types.append(mime_type)
+
+        if not text.strip() and not media_urls:
             return
+
+        msg_type = MessageType.PHOTO if media_urls else MessageType.TEXT
 
         sender_name = (
             str(sender.get("display_name") or sender.get("name") or user_id).strip()
@@ -301,10 +324,12 @@ class AgenrenaAdapter(BasePlatformAdapter):
         )
         event = MessageEvent(
             text=text,
-            message_type=MessageType.TEXT,
+            message_type=msg_type,
             source=source,
             raw_message=payload,
             message_id=message_id,
+            media_urls=media_urls,
+            media_types=media_types,
             reply_to_message_id=payload.get("reply_to_id"),
             timestamp=_parse_timestamp(payload.get("created_at")),
         )

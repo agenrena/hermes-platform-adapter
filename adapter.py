@@ -5,18 +5,8 @@ Minimal plugin adapter:
 - inbound messages arrive over Agenrena's agent WebSocket
 - outbound replies are sent through Agenrena's Agent REST API
 
-Configuration in config.yaml:
-
-    gateway:
-      platforms:
-        agenrena:
-          enabled: true
-          extra:
-            api_key: "..."
-            host: "api.agenrena.com"
-
-Or via environment variables:
-    AGENRENA_API_KEY, AGENRENA_HOST
+Run ``hermes gateway setup`` to configure, or set the environment variable:
+    AGENRENA_API_KEY
 """
 
 from __future__ import annotations
@@ -27,7 +17,7 @@ import logging
 import os
 from datetime import datetime
 from typing import Any, Dict, Optional
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote
 
 try:
     import httpx
@@ -55,18 +45,8 @@ from gateway.platforms.base import (
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_HOST = "api.agenrena.com"
+API_HOST = "api.agenrena.com"
 RECONNECT_DELAY_SECONDS = 5
-
-
-def _normalize_host(raw: str | None) -> str:
-    """Return a bare host[:port] from env/config values."""
-    value = (raw or "").strip() or DEFAULT_HOST
-    if "://" in value:
-        parsed = urlsplit(value)
-        if parsed.netloc:
-            return parsed.netloc.rstrip("/")
-    return value.strip().strip("/")
 
 
 def _parse_timestamp(value: Any) -> datetime:
@@ -104,17 +84,6 @@ class AgenrenaAdapter(BasePlatformAdapter):
     def __init__(self, config: PlatformConfig):
         super().__init__(config, Platform("agenrena"))
         self.api_key = _get_config_value(config, "api_key", "AGENRENA_API_KEY")
-        self.host = _normalize_host(_get_config_value(config, "host", "AGENRENA_HOST", DEFAULT_HOST))
-        reconnect_delay = _get_config_value(
-            config,
-            "reconnect_delay_seconds",
-            "AGENRENA_RECONNECT_DELAY_SECONDS",
-            str(RECONNECT_DELAY_SECONDS),
-        )
-        try:
-            self.reconnect_delay = max(1, int(reconnect_delay))
-        except ValueError:
-            self.reconnect_delay = RECONNECT_DELAY_SECONDS
         self._recv_task: Optional[asyncio.Task] = None
         self._ws = None
 
@@ -124,10 +93,10 @@ class AgenrenaAdapter(BasePlatformAdapter):
 
     def _ws_url(self) -> str:
         token = quote(self.api_key, safe="")
-        return f"wss://{self.host}/ws/agent/events/?token={token}"
+        return f"wss://{API_HOST}/ws/agent/events/?token={token}"
 
     def _api_url(self, path: str) -> str:
-        return f"https://{self.host}{path}"
+        return f"https://{API_HOST}{path}"
 
     async def connect(self) -> bool:
         if not WEBSOCKETS_AVAILABLE:
@@ -157,7 +126,7 @@ class AgenrenaAdapter(BasePlatformAdapter):
         self._running = True
         self._recv_task = asyncio.create_task(self._receive_loop())
         self._mark_connected()
-        logger.info("[agenrena] WebSocket receiver started for %s", self.host)
+        logger.info("[agenrena] WebSocket receiver started")
         return True
 
     async def disconnect(self) -> None:
@@ -253,8 +222,8 @@ class AgenrenaAdapter(BasePlatformAdapter):
                 self._ws = None
 
             if self._running:
-                logger.info("[agenrena] Reconnecting WebSocket in %ss", self.reconnect_delay)
-                await asyncio.sleep(self.reconnect_delay)
+                logger.info("[agenrena] Reconnecting WebSocket in %ss", RECONNECT_DELAY_SECONDS)
+                await asyncio.sleep(RECONNECT_DELAY_SECONDS)
 
     async def _handle_ws_message(self, raw: Any) -> None:
         try:
@@ -305,6 +274,66 @@ class AgenrenaAdapter(BasePlatformAdapter):
         await self.handle_message(event)
 
 
+def interactive_setup() -> None:
+    """Interactive ``hermes gateway setup`` flow for the Agenrena platform.
+
+    Lazy-imports ``hermes_cli.setup`` helpers so the plugin stays importable
+    in non-CLI contexts (gateway runtime, tests).
+    """
+    from hermes_cli.setup import (
+        prompt,
+        prompt_yes_no,
+        save_env_value,
+        get_env_value,
+        print_header,
+        print_info,
+        print_warning,
+        print_success,
+    )
+
+    print_header("Agenrena")
+    existing_key = get_env_value("AGENRENA_API_KEY")
+    if existing_key:
+        masked = existing_key[:6] + "..." + existing_key[-4:] if len(existing_key) > 10 else "***"
+        print_info(f"Agenrena: already configured (key: {masked})")
+        if not prompt_yes_no("Reconfigure Agenrena?", False):
+            return
+
+    print_info("Connect Hermes to Agenrena.")
+    print_info("   You need an Agenrena agent API key (starts with agr_).")
+    print_info("   Get one from your Agenrena dashboard.")
+    print()
+
+    api_key = prompt("Agenrena API key", default="", password=True)
+    if not api_key:
+        print_warning("API key is required — skipping Agenrena setup")
+        return
+    save_env_value("AGENRENA_API_KEY", api_key.strip())
+
+    print()
+    print_info("Access control: restrict who can message the bot")
+    allow_all = prompt_yes_no("Allow all Agenrena users to talk to the bot?", True)
+    if allow_all:
+        save_env_value("AGENRENA_ALLOW_ALL_USERS", "true")
+        save_env_value("AGENRENA_ALLOWED_USERS", "")
+    else:
+        save_env_value("AGENRENA_ALLOW_ALL_USERS", "false")
+        allowed = prompt(
+            "Allowed user IDs (comma-separated)",
+            default=get_env_value("AGENRENA_ALLOWED_USERS") or "",
+        )
+        if allowed:
+            save_env_value("AGENRENA_ALLOWED_USERS", allowed.replace(" ", ""))
+            print_success("Allowlist configured")
+        else:
+            save_env_value("AGENRENA_ALLOWED_USERS", "")
+            print_info("No users allowed — the bot will ignore all messages until you add users.")
+
+    print()
+    print_success("Agenrena configuration saved to ~/.hermes/.env")
+    print_info("Restart the gateway for changes to take effect: hermes gateway restart")
+
+
 def register(ctx) -> None:
     """Plugin entry point called by the Hermes plugin system."""
     ctx.register_platform(
@@ -315,7 +344,8 @@ def register(ctx) -> None:
         validate_config=validate_config,
         is_connected=is_connected,
         required_env=["AGENRENA_API_KEY"],
-        install_hint="pip install websockets",
+        install_hint="pip install websockets httpx",
+        setup_fn=interactive_setup,
         allowed_users_env="AGENRENA_ALLOWED_USERS",
         allow_all_env="AGENRENA_ALLOW_ALL_USERS",
         max_message_length=4000,

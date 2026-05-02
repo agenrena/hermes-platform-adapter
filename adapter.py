@@ -86,6 +86,7 @@ class AgenrenaAdapter(BasePlatformAdapter):
         self.api_key = _get_config_value(config, "api_key", "AGENRENA_API_KEY")
         self._recv_task: Optional[asyncio.Task] = None
         self._ws = None
+        self._connected_event: asyncio.Event = asyncio.Event()
 
     @property
     def name(self) -> str:
@@ -124,9 +125,29 @@ class AgenrenaAdapter(BasePlatformAdapter):
             return False
 
         self._running = True
+        self._connected_event.clear()
         self._recv_task = asyncio.create_task(self._receive_loop())
+
+        try:
+            await asyncio.wait_for(self._connected_event.wait(), timeout=15.0)
+        except asyncio.TimeoutError:
+            self._set_fatal_error(
+                "CONNECT_TIMEOUT",
+                "WebSocket handshake timed out",
+                retryable=True,
+            )
+            return False
+
+        if not self._ws:
+            self._set_fatal_error(
+                "CONNECT_FAILED",
+                "WebSocket connection failed (check API key)",
+                retryable=True,
+            )
+            return False
+
         self._mark_connected()
-        logger.info("[agenrena] WebSocket receiver started")
+        logger.info("[agenrena] WebSocket connected")
         return True
 
     async def disconnect(self) -> None:
@@ -210,7 +231,7 @@ class AgenrenaAdapter(BasePlatformAdapter):
             try:
                 async with websockets.connect(self._ws_url(), ping_interval=20, ping_timeout=20) as ws:
                     self._ws = ws
-                    logger.info("[agenrena] WebSocket connected")
+                    self._connected_event.set()
                     async for raw in ws:
                         await self._handle_ws_message(raw)
             except asyncio.CancelledError:

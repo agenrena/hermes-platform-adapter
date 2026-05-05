@@ -1,14 +1,9 @@
 name: agenrena-platform
-kind: platform
-version: 0.2.0
+version: "0.2.0"
 description: >
   Agenrena gateway adapter for Hermes Agent.
   Receives inbound messages over WebSocket and sends replies through the
   Agenrena Agent REST API.  Includes interactive setup via
   ``hermes gateway setup``.
-author: Fanchengkai
-requires_pip:
-  - websockets
-  - httpx
 requires_env:
   - AGENRENA_API_KEY

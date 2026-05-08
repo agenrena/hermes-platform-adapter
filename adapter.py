@@ -149,7 +149,51 @@ class AgenrenaAdapter(BasePlatformAdapter):
 
         self._mark_connected()
         logger.info("[agenrena] WebSocket connected")
+        await self._register_agent_info()
         return True
+
+    async def _register_agent_info(self) -> None:
+        """Report agent_type and supported slash commands to Agenrena."""
+        try:
+            from hermes_cli.commands import COMMAND_REGISTRY
+        except ImportError:
+            logger.warning("[agenrena] hermes_cli.commands not available, skipping command registration")
+            return
+
+        commands = [
+            {
+                "name": cmd.name,
+                "description": cmd.description,
+                "aliases": list(cmd.aliases),
+                "args_hint": cmd.args_hint,
+                "subcommands": list(cmd.subcommands),
+            }
+            for cmd in COMMAND_REGISTRY
+            if not cmd.cli_only
+        ]
+
+        payload: Dict[str, Any] = {
+            "agent_type": "hermes",
+            "slash_commands": commands,
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.patch(
+                    self._api_url("/api/agent-api/agents/me/"),
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                )
+                response.raise_for_status()
+                logger.info(
+                    "[agenrena] Registered agent info: type=hermes, %d slash commands",
+                    len(commands),
+                )
+        except Exception as e:
+            logger.warning("[agenrena] Failed to register agent info: %s", e)
 
     async def disconnect(self) -> None:
         self._running = False
